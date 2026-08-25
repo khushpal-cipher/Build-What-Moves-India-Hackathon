@@ -1,0 +1,15 @@
+# Environment files — never commit secrets
+.env
+.env.local
+.env*.local
+
+# Next.js build output
+.next/
+out/
+
+# Node modules
+node_modules/
+
+# OS / editor
+.DS_Store
+*.swp
