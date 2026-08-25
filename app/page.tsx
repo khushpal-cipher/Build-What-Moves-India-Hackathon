@@ -164,63 +164,44 @@ export default function Home() {
     setNotice("Step 2 of 3: answer one plain-language question at a time. Every answer remains editable.");
   }
 
-async function submitAnswer(event: FormEvent<HTMLFormElement>) {
+  async function submitAnswer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!currentQuestion || !answer.trim()) return;
 
     const latestAnswer = answer.trim();
+    const nextQuestion = formQuestions[questionIndex + 1]?.question ?? "Your draft is ready for appointment booking.";
     setIsSending(true);
     setNotice("");
 
-    // 1. Fetch the data from the backend
     const aiResult = await callPassportGuide({
       mode: "form",
       application: applicant,
       documents,
       message: latestAnswer,
       currentField: currentQuestion.field,
-      nextQuestion: formQuestions[questionIndex + 1]?.question // Sent as fallback buffer
+      nextQuestion
     });
-
     const fallback = makeLocalGuideResponse(
       "form",
       documents,
       currentQuestion.field,
       latestAnswer,
-      formQuestions[questionIndex + 1]?.question ?? "Your draft is ready for appointment booking."
+      nextQuestion
     );
-    
     const result = aiResult ?? fallback;
+    const extracted = result.extractedFields[currentQuestion.field];
+    const cleanedAnswer = latestAnswer.toLowerCase() === "same as current address"
+      ? applicant.currentAddress
+      : extracted?.trim() || latestAnswer;
 
-    // 2. DYNAMIC MERGE: Accept ALL fields the AI successfully extracted
-    const updatedApplicant = { ...applicant };
-    Object.entries(result.extractedFields).forEach(([key, value]) => {
-      if (value && typeof value === "string") {
-        updatedApplicant[key as keyof ApplicantDraft] = value.trim();
-      }
-    });
-
-    // Retain your manual override for the address edge-case
-    if (latestAnswer.toLowerCase() === "same as current address") {
-      updatedApplicant[currentQuestion.field] = applicant.currentAddress;
-    }
-
-    // 3. DYNAMIC INDEXING: Find the next field that is ACTUALLY empty
-    const nextIdx = formQuestions.findIndex((q) => !updatedApplicant[q.field as keyof ApplicantDraft]);
-
-    // 4. Update React State
-    setApplicant(updatedApplicant);
-    
+    setApplicant((current) => ({ ...current, [currentQuestion.field]: cleanedAnswer }));
     setMessages((current) => [
       ...current,
       { role: "user", content: latestAnswer },
-      // Use the AI's dynamically generated question instead of the hardcoded one!
-      { role: "assistant", content: `${result.reply} ${result.nextQuestion}` } 
+      { role: "assistant", content: `${result.reply} ${nextQuestion}` }
     ]);
-    
     setAnswer("");
-    // Jump the UI forward to the correct next question
-    setQuestionIndex(nextIdx === -1 ? formQuestions.length : nextIdx); 
+    setQuestionIndex((current) => current + 1);
     setIsSending(false);
     setNotice(aiResult ? "PassportGuide AI updated your draft." : "Demo-safe fallback updated your draft.");
   }
@@ -236,9 +217,33 @@ async function submitAnswer(event: FormEvent<HTMLFormElement>) {
     setSelectedSlotId(centre.slots[0].id);
   }
 
-  function confirmAppointment() {
-    setStep(4);
-    setNotice("Demo appointment confirmed. No money was charged and nothing was submitted to Passport Seva.");
+  async function confirmAppointment() {
+    setNotice("Saving your appointment to the database...");
+    
+    try {
+      const response = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...applicant, // Spread the extracted form fields
+          pskCentreId: selectedCentreId,
+          appointmentSlotId: selectedSlotId,
+          appointmentFee: passportRules.appointment.normalFee
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Database save failed");
+      }
+
+      // Success! Move to the final confirmation screen
+      setStep(4);
+      setNotice("Demo appointment confirmed and saved to database! No money was charged.");
+      
+    } catch (error) {
+      console.error(error);
+      setNotice("Error: Could not save the appointment to the database. Check your network or MongoDB connection.");
+    }
   }
 
   return (
