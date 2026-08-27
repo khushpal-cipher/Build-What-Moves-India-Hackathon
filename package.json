@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@google/genai": "^2.19.0",
     "mongoose": "^9.9.3",
     "next": "^15.5.4",
     "openai": "^6.0.0",

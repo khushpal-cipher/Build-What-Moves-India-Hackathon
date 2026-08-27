@@ -2,116 +2,96 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const { message, currentDraft } = await req.json();
     
-    // 🚨 Notice we are pulling out 'mode' and 'documents' now!
-    const { mode, message, application, documents } = body;
-    const apiKey = process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
+    // Explicitly grab the key and clean it
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    
+    // DEBUG: This will print in your VS Code terminal so we know it loaded!
+    console.log("🔑 API Key Status: ", apiKey ? `Loaded (Starts with ${apiKey.substring(0, 5)}...)` : "MISSING!");
 
     if (!apiKey) {
-      console.error("[API ERROR]: No API key found.");
-      return NextResponse.json({ error: "Missing API Key" }, { status: 500 });
+      return NextResponse.json({ error: "Missing API Key in .env.local" }, { status: 500 });
     }
 
-    let systemPrompt = "";
+    const prompt = `
+    You are an official Indian Passport Application Guide.
+    The user is filling out their passport form one conversational step at a time.
+    
+    Current Draft State:
+    ${JSON.stringify(currentDraft, null, 2)}
 
-    // ==========================================
-    // BRAIN 1: DOCUMENT CHECKER MODE
-    // ==========================================
-    if (mode === "documents") {
-      systemPrompt = `
-You are PassportGuide AI. Your job is to review the user's uploaded mock documents for an Indian Passport application.
-Respond with ONLY raw, valid JSON. DO NOT wrap it in markdown blocks.
+    User's latest input: "${message}"
 
-User's Uploaded Documents:
-${JSON.stringify(documents, null, 2)}
+    Strict Instructions:
+    1. Analyze the user's input. If it is gibberish (e.g., "asdfgh"), offensive, or clearly invalid for a passport form, DO NOT extract it. 
+    2. If invalid, your 'reply' must politely explain what went wrong and ask the question again.
+    3. If valid, extract the relevant data into the 'extractedFields' object.
+    4. Your 'reply' must then ask for the NEXT missing field in this exact order: 
+       fullName ➔ dob (ask for YYYY-MM-DD format) ➔ email ➔ mobile ➔ parentName ➔ currentAddress ➔ permanentAddress.
+    5. If they are providing their permanent address and say "Same", copy the currentAddress.
+    6. If all fields are complete, tell them the draft is ready and to click 'Review PSK Slots & Fee'.
+    `;
 
-JSON Structure:
-{
-  "reply": "A short 1-sentence summary of what is ready and what is missing.",
-  "documentChecks": [
-    {
-      "id": "Must match the exact id of the document (e.g., 'address', 'dob', 'identity')",
-      "status": "Evaluate the mockFileName. If it looks correct, output 'ready'. If missing, 'missing'. If it looks wrong, 'needs_attention'.",
-      "note": "A short 1-sentence helpful note explaining the status."
-    }
-  ]
-}
-`;
-    } 
-    // ==========================================
-    // BRAIN 2: CONVERSATIONAL FORM MODE
-    // ==========================================
-    else {
-      systemPrompt = `
-You are PassportGuide AI. Extract passport application details from user messages.
-Respond with ONLY raw, valid JSON. DO NOT wrap it in markdown blocks. DO NOT add conversational text.
-
-Current Application Draft:
-${JSON.stringify(application || {}, null, 2)}
-
-User Input: "${message}"
-
-JSON Structure (YOU MUST USE THESE EXACT KEYS):
-{
-  "reply": "A short 1-sentence acknowledgement.",
-  "extractedFields": {
-    "fullName": "Extracted full name (or omit if not mentioned)",
-    "dateOfBirth": "Extracted date (or omit if not mentioned)",
-    "email": "Extracted email (or omit if not mentioned)",
-    "mobile": "Extracted mobile (or omit if not mentioned)",
-    "parentName": "Extracted parent name (or omit if not mentioned)",
-    "currentAddress": "Extracted address (or omit if not mentioned)",
-    "permanentAddress": "Extracted address (or omit if not mentioned)"
-  },
-  "nextQuestion": "The next logical question to ask based on what is STILL empty. CRITICAL RULE: You MUST NOT ask for a field that you just populated in extractedFields!"
-}
-`;
-    }
-
-    // Call Gemini with whichever brain we selected
+    // Direct REST API Call using the Secure Header Method
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey, // Securely passing the key here instead of the URL
+        },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+          contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 0.1,
-            responseMimeType: "application/json"
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                extractedFields: {
+                  type: "OBJECT",
+                  properties: {
+                    fullName: { type: "STRING" },
+                    dob: { type: "STRING" },
+                    email: { type: "STRING" },
+                    mobile: { type: "STRING" },
+                    parentName: { type: "STRING" },
+                    currentAddress: { type: "STRING" },
+                    permanentAddress: { type: "STRING" }
+                  }
+                },
+                reply: { 
+                  type: "STRING", 
+                  description: "Your conversational response to the user." 
+                }
+              },
+              required: ["reply"]
+            }
           }
-        }),
+        })
       }
     );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("[GEMINI API ERROR]:", response.status, errorText);
-      return NextResponse.json({ error: errorText }, { status: response.status });
+      const errorData = await response.json();
+      console.error("Google REST API Error:", errorData);
+      throw new Error("Failed to fetch from Gemini REST API");
     }
 
     const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     
-    // Failsafe cleanup
-    const cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(cleanText);
+    // Parse the JSON string that Gemini returns inside the text block
+    const rawText = data.candidates[0].content.parts[0].text;
+    const responseData = JSON.parse(rawText);
 
-    // Apply the shotgun fix ONLY if we are in form mode
-    if (mode !== "documents" && parsed.extractedFields && parsed.extractedFields.dateOfBirth) {
-      const d = parsed.extractedFields.dateOfBirth;
-      parsed.extractedFields.dob = d;
-      parsed.extractedFields.birthDate = d;
-      parsed.extractedFields.DateOfBirth = d;
-      parsed.extractedFields.date_of_birth = d;
-    }
+    return NextResponse.json(responseData);
 
-    console.log(`✅ [${mode.toUpperCase()} MODE] AI OUTPUT:`, parsed);
-
-    return NextResponse.json(parsed);
-  } catch (error: any) {
-    console.error("[ROUTE HANDLER EXCEPTION]:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    console.error("Backend Error:", error);
+    return NextResponse.json(
+      { error: "Failed to process request" }, 
+      { status: 500 }
+    );
   }
 }

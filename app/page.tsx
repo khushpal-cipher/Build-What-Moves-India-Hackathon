@@ -1,512 +1,309 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import {
-  appointmentCentres,
-  demoApplicant,
-  demoDocuments,
-  emptyApplicant,
-  emptyDocuments,
-  formQuestions,
-  makeLocalGuideResponse,
-  passportRules,
-  type ApplicantDraft,
-  type DocumentId,
-  type DocumentRecord,
-  type DocumentStatus,
-  type GuideResponse
-} from "@/lib/mockData";
+import { useState } from "react";
 
-type Step = 1 | 2 | 3 | 4;
-type ChatMessage = { role: "assistant" | "user"; content: string };
-type FormField = (typeof formQuestions)[number]["field"];
-
-const stepLabels = ["Documents", "AI form", "Appointment"];
-
-const statusStyles: Record<DocumentStatus, string> = {
-  ready: "bg-emerald-100 text-emerald-950 ring-1 ring-inset ring-emerald-300",
-  needs_attention: "bg-amber-100 text-amber-950 ring-1 ring-inset ring-amber-300",
-  missing: "bg-rose-100 text-rose-950 ring-1 ring-inset ring-rose-300",
-  unverified: "bg-slate-100 text-slate-800 ring-1 ring-inset ring-slate-300"
-};
-
-const statusLabels: Record<DocumentStatus, string> = {
-  ready: "Ready",
-  needs_attention: "Needs attention",
-  missing: "Missing",
-  unverified: "Not checked"
-};
-
-function isReadyToBook(applicant: ApplicantDraft) {
-  return [
-    applicant.fullName,
-    applicant.dateOfBirth,
-    applicant.email,
-    applicant.mobile,
-    applicant.parentName,
-    applicant.currentAddress,
-    applicant.permanentAddress
-  ].every(Boolean);
+interface ApplicantData {
+  fullName: string;
+  dob: string;
+  email: string;
+  mobile: string;
+  parentName: string;
+  currentAddress: string;
+  permanentAddress: string;
 }
 
-export default function Home() {
-  const [step, setStep] = useState<Step>(1);
-  const [applicant, setApplicant] = useState<ApplicantDraft>(emptyApplicant);
-  const [documents, setDocuments] = useState<DocumentRecord[]>(emptyDocuments);
-  const [documentSummary, setDocumentSummary] = useState(
-    "Add mock documents, then ask PassportGuide AI to explain what is ready."
-  );
-  const [isCheckingDocuments, setIsCheckingDocuments] = useState(false);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [answer, setAnswer] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content: "I’ll turn a long application into a short conversation. You can review every answer before booking."
-    }
+export default function PassportPathDesktop() {
+  // --- UI STATE ---
+  const [isDemoMode, setIsDemoMode] = useState(true);
+  const [activeTab, setActiveTab] = useState<"documents" | "application" | "appointment" | "track">("documents");
+  
+  // --- STEP 1: DOCUMENT UPLOAD STATE ---
+  const [docs, setDocs] = useState({ address: false, dob: false, ecr: false });
+  const [isScanning, setIsScanning] = useState({ address: false, dob: false, ecr: false });
+  
+  const allDocsUploaded = docs.address && docs.dob && docs.ecr;
+  // NEW: Bypass document upload if in Demo Mode
+  const canProceedToApp = isDemoMode || allDocsUploaded;
+
+  // --- STEP 2: APPLICATION LOGIC STATE ---
+  const [chatInput, setChatInput] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [applicant, setApplicant] = useState<Partial<ApplicantData>>({});
+  const [chatHistory, setChatHistory] = useState([
+    { role: "ai", text: "What is your full name, exactly as it appears on your date-of-birth proof?" }
   ]);
-  const [isSending, setIsSending] = useState(false);
-  const [selectedCentreId, setSelectedCentreId] = useState<string>(appointmentCentres[0].id);
-  const [selectedSlotId, setSelectedSlotId] = useState<string>(appointmentCentres[0].slots[0].id);
-  const [demoActive, setDemoActive] = useState(false);
-  const [notice, setNotice] = useState("");
 
-  const currentQuestion = formQuestions[questionIndex];
-  const selectedCentre = useMemo(
-    () => appointmentCentres.find((centre) => centre.id === selectedCentreId) ?? appointmentCentres[0],
-    [selectedCentreId]
-  );
-  const selectedSlot = selectedCentre.slots.find((slot) => slot.id === selectedSlotId) ?? selectedCentre.slots[0];
-  const readyDocuments = documents.filter((document) => document.status === "ready").length;
-  const formComplete = isReadyToBook(applicant);
+  const isReadyToBook = (data: Partial<ApplicantData>) => {
+    return !!(data.fullName && data.dob && data.email && data.mobile && data.parentName && data.currentAddress && data.permanentAddress);
+  };
 
-  function activateDemo() {
-    setApplicant(demoApplicant);
-    setDocuments(demoDocuments.map((document) => ({ ...document })));
-    setDocumentSummary("Demo checklist loaded: two essentials are ready and one supporting ID has a helpful reminder.");
-    setMessages([
-      {
-        role: "assistant",
-        content: "Quick Demo Mode loaded Aarav’s safe mock profile. Ask a question or use the demo answers to see the form synchronise."
-      }
-    ]);
-    setQuestionIndex(0);
-    setAnswer("");
-    setDemoActive(true);
-    setStep(1);
-    setNotice("Quick Demo Mode is on. No real identity, document, OTP, or payment data is used.");
-  }
+  // NEW: Smart Demo Answer logic (Context Aware)
+  const getDemoAnswer = () => {
+    if (!applicant.fullName) return "Aarav Kulkarni";
+    if (!applicant.dob) return "1998-05-14";
+    if (!applicant.email) return "aarav.k@example.com";
+    if (!applicant.mobile) return "9876543210";
+    if (!applicant.parentName) return "Rajesh Kulkarni";
+    if (!applicant.currentAddress) return "123 FC Road, Pune";
+    if (!applicant.permanentAddress) return "Same";
+    return "";
+  };
 
-  function updateMockFile(id: DocumentId, fileName: string) {
-    setDocuments((current) =>
-      current.map((document) =>
-        document.id === id
-          ? {
-              ...document,
-              mockFileName: fileName,
-              uploaded: Boolean(fileName),
-              status: "unverified",
-              note: fileName
-                ? "Mock file added. Ask PassportGuide AI to check it against this demo ruleset."
-                : "No mock file has been selected yet."
-            }
-          : document
-      )
-    );
-    setNotice("Mock file name saved locally. No document image is uploaded or sent to the AI in this prototype.");
-  }
+  const handleFileUpload = (docType: 'address' | 'dob' | 'ecr') => {
+    setIsScanning(prev => ({ ...prev, [docType]: true }));
+    setTimeout(() => {
+      setIsScanning(prev => ({ ...prev, [docType]: false }));
+      setDocs(prev => ({ ...prev, [docType]: true }));
+    }, 1500);
+  };
 
-  function applyDocumentChecks(checks: GuideResponse["documentChecks"]) {
-    if (!checks.length) return;
-    setDocuments((current) =>
-      current.map((document) => {
-        const result = checks.find((check) => check.id === document.id);
-        return result ? { ...document, status: result.status, note: result.note } : document;
-      })
-    );
-  }
-
-  async function callPassportGuide(payload: Record<string, unknown>): Promise<GuideResponse | null> {
-    try {
-      const response = await fetch("/api/passport-guide", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error("Guide unavailable");
-      return (await response.json()) as GuideResponse;
-    } catch {
-      return null;
-    }
-  }
-
-  async function checkDocuments() {
-    setIsCheckingDocuments(true);
-    setNotice("");
-    const aiResult = await callPassportGuide({
-      mode: "documents",
-      application: applicant,
-      documents
-    });
-    const result = aiResult ?? makeLocalGuideResponse("documents", documents);
-    applyDocumentChecks(result.documentChecks);
-    setDocumentSummary(result.reply);
-    setNotice(
-      aiResult
-        ? "PassportGuide AI checked mock metadata against the local demo rules."
-        : "Demo-safe fallback used. Add OPENAI_API_KEY to enable the live PassportGuide AI check."
-    );
-    setIsCheckingDocuments(false);
-  }
-
-  function continueToForm() {
-    setStep(2);
-    setNotice("Step 2 of 3: answer one plain-language question at a time. Every answer remains editable.");
-  }
-
-  async function submitAnswer(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!currentQuestion || !answer.trim()) return;
-
-    const latestAnswer = answer.trim();
-    const nextQuestion = formQuestions[questionIndex + 1]?.question ?? "Your draft is ready for appointment booking.";
-    setIsSending(true);
-    setNotice("");
-
-    const aiResult = await callPassportGuide({
-      mode: "form",
-      application: applicant,
-      documents,
-      message: latestAnswer,
-      currentField: currentQuestion.field,
-      nextQuestion
-    });
-    const fallback = makeLocalGuideResponse(
-      "form",
-      documents,
-      currentQuestion.field,
-      latestAnswer,
-      nextQuestion
-    );
-    const result = aiResult ?? fallback;
-    const extracted = result.extractedFields[currentQuestion.field];
-    const cleanedAnswer = latestAnswer.toLowerCase() === "same as current address"
-      ? applicant.currentAddress
-      : extracted?.trim() || latestAnswer;
-
-    setApplicant((current) => ({ ...current, [currentQuestion.field]: cleanedAnswer }));
-    setMessages((current) => [
-      ...current,
-      { role: "user", content: latestAnswer },
-      { role: "assistant", content: `${result.reply} ${nextQuestion}` }
-    ]);
-    setAnswer("");
-    setQuestionIndex((current) => current + 1);
-    setIsSending(false);
-    setNotice(aiResult ? "PassportGuide AI updated your draft." : "Demo-safe fallback updated your draft.");
-  }
-
-  function useDemoAnswer() {
-    if (!currentQuestion) return;
-    setAnswer(demoApplicant[currentQuestion.field as FormField]);
-  }
-
-  function chooseCentre(centreId: string) {
-    const centre = appointmentCentres.find((item) => item.id === centreId) ?? appointmentCentres[0];
-    setSelectedCentreId(centre.id);
-    setSelectedSlotId(centre.slots[0].id);
-  }
-
-  async function confirmAppointment() {
-    setNotice("Saving your appointment to the database...");
+  // CLEANED: Only talks to the API, no more fake setTimeout overriding the whole form!
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    
+    setIsSubmitting(true);
+    const userText = chatInput;
+    setChatInput(""); 
+    setChatHistory(prev => [...prev, { role: "user", text: userText }]);
     
     try {
-      const response = await fetch("/api/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...applicant, // Spread the extracted form fields
-          pskCentreId: selectedCentreId,
-          appointmentSlotId: selectedSlotId,
-          appointmentFee: passportRules.appointment.normalFee
-        }),
+      const response = await fetch('/api/passport-guide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userText, currentDraft: applicant })
       });
-
-      if (!response.ok) {
-        throw new Error("Database save failed");
-      }
-
-      // Success! Move to the final confirmation screen
-      setStep(4);
-      setNotice("Demo appointment confirmed and saved to database! No money was charged.");
+      if (!response.ok) throw new Error("API Route failed.");
       
+      const data = await response.json();
+      
+      if (data.extractedFields) setApplicant(prev => ({ ...prev, ...data.extractedFields }));
+      if (data.reply) setChatHistory(prev => [...prev, { role: "ai", text: data.reply }]);
     } catch (error) {
-      console.error(error);
-      setNotice("Error: Could not save the appointment to the database. Check your network or MongoDB connection.");
+      console.error("API Error:", error);
+      setChatHistory(prev => [...prev, { role: "ai", text: "⚠️ Error connecting to API." }]);
+    } finally {
+      setIsSubmitting(false);
     }
-  }
+  };
 
   return (
-    <main className="min-h-screen bg-slate-50 pb-12">
-      <div className="mx-auto max-w-5xl px-4 pt-5 sm:px-6">
-        <header className="rounded-3xl bg-slate-950 px-5 py-6 text-white shadow-card sm:px-8">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-bold uppercase tracking-[0.18em] text-amber-300">Build What Moves India</p>
-              <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">PassportPath</h1>
-              <p className="mt-2 max-w-2xl text-base leading-6 text-slate-200">
-                A calmer, mobile-first path to a first passport. Built as an independent hackathon prototype.
-              </p>
+    <div className="min-h-screen bg-[#E5E7EB] flex items-center justify-center p-8 font-sans">
+      <div className="w-full max-w-[1440px] h-[90vh] bg-white rounded-[2rem] shadow-2xl flex overflow-hidden border border-gray-200">
+        
+        {/* --- LEFT SIDEBAR --- */}
+        <aside className="w-[280px] border-r border-gray-100 flex flex-col justify-between shrink-0 bg-white">
+          <div>
+            <div className="p-8 pb-6 flex items-center gap-3 border-b border-gray-50">
+              <div className="w-12 h-12 bg-gov-navy rounded flex items-center justify-center text-white text-[10px] font-bold text-center leading-tight">Emblem</div>
+              <div>
+                <h1 className="text-xl font-bold text-gov-navy tracking-tight leading-none">Passport Seva</h1>
+                <p className="text-[10px] text-gov-orange font-bold tracking-wider uppercase mt-1">Service Excellence</p>
+              </div>
             </div>
-            <span className="shrink-0 rounded-full bg-emerald-300 px-3 py-1 text-xs font-black text-emerald-950">DEMO ONLY</span>
-          </div>
-        </header>
 
-        <section className="mt-4 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 shadow-sm" aria-labelledby="demo-mode-title">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 id="demo-mode-title" className="text-lg font-black text-slate-950">Quick Demo Mode / 1-Tap Login</h2>
-              <p className="mt-1 text-sm font-medium text-slate-800">Pre-fills Aarav’s fictional profile, mock documents, and a ready-to-review application.</p>
+            <div className="mt-4 px-4 space-y-2">
+              <button onClick={() => setActiveTab("documents")} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left text-sm font-semibold transition-colors ${activeTab === "documents" ? "bg-gov-navy text-white shadow-md" : "text-gray-500 hover:bg-gray-50"}`}>
+                <span className="text-lg">📄</span> 1. Documents
+              </button>
+              
+              <button 
+                onClick={() => canProceedToApp ? setActiveTab("application") : alert("Upload required documents first.")} 
+                className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left text-sm font-semibold transition-colors ${activeTab === "application" ? "bg-gov-navy text-white shadow-md" : "text-gray-500 hover:bg-gray-50"} ${!canProceedToApp && "opacity-50 grayscale cursor-not-allowed"}`}
+              >
+                <span className="text-lg">▲</span> 2. Passport Application
+              </button>
+              
+              <button onClick={() => isReadyToBook(applicant) ? setActiveTab("appointment") : alert("Complete the application first.")} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left text-sm font-semibold transition-colors ${activeTab === "appointment" ? "bg-gov-navy text-white shadow-md" : "text-gray-500 hover:bg-gray-50"} ${!isReadyToBook(applicant) && "opacity-50 cursor-not-allowed"}`}>
+                <span className="text-lg">📅</span> 3. Book Appointment
+              </button>
+              <button onClick={() => setActiveTab("track")} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-left text-sm font-semibold transition-colors ${activeTab === "track" ? "bg-gov-navy text-white shadow-md" : "text-gray-500 hover:bg-gray-50"}`}>
+                <span className="text-lg">📍</span> Track Application
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={activateDemo}
-              className="min-h-12 shrink-0 rounded-xl bg-slate-950 px-5 py-3 text-base font-black text-white transition hover:bg-slate-800"
-            >
-              {demoActive ? "Reload demo profile" : "Start demo instantly"}
-            </button>
           </div>
-        </section>
+        </aside>
 
-        <p className="sr-only" aria-live="polite">{notice}</p>
+        {/* --- RIGHT CONTENT PANEL --- */}
+        <div className="flex-1 flex flex-col bg-white overflow-hidden">
+          
+          <header className="h-[100px] border-b border-gray-100 px-10 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-4">
+              <span className="text-gray-400 text-xl font-light pl-2">«</span>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+                <input type="text" placeholder="Search Passport FAQ's, etc" className="w-[400px] bg-[#F5F5F5] text-sm text-gray-600 rounded-full py-3 pl-12 pr-6 focus:outline-none focus:ring-2 focus:ring-gov-navy/10"/>
+              </div>
+            </div>
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-gray-400 uppercase">Live</span>
+                <button onClick={() => setIsDemoMode(!isDemoMode)} className={`w-10 h-5 rounded-full transition-colors relative ${isDemoMode ? 'bg-gov-orange' : 'bg-gray-200'}`}>
+                  <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-transform ${isDemoMode ? 'translate-x-[22px]' : 'translate-x-1'}`} />
+                </button>
+                <span className="text-[10px] font-bold text-gov-navy uppercase">Demo</span>
+              </div>
+              <button className="border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600 font-medium hover:bg-gray-50">English ⌄</button>
+            </div>
+          </header>
 
-        <nav className="mt-6" aria-label="Application progress">
-          <ol className="grid grid-cols-3 gap-2">
-            {stepLabels.map((label, index) => {
-              const number = index + 1;
-              const active = step === number;
-              const complete = step > number;
-              return (
-                <li key={label} className={`rounded-xl border-2 p-3 text-center ${active ? "border-slate-950 bg-slate-950 text-white" : complete ? "border-emerald-700 bg-emerald-50 text-emerald-950" : "border-slate-200 bg-white text-slate-700"}`}>
-                  <span className="block text-xs font-bold uppercase tracking-wide">Step {number}</span>
-                  <span className="mt-1 block text-sm font-black">{label}</span>
-                </li>
-              );
-            })}
-          </ol>
-        </nav>
-
-        {step === 1 && (
-          <section className="mt-6 grid gap-5 lg:grid-cols-[1.35fr_0.65fr]" aria-labelledby="document-checker-title">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-7">
-              <p className="text-sm font-black uppercase tracking-[0.14em] text-blue-800">Step 1 · Document check</p>
-              <h2 id="document-checker-title" className="mt-2 text-2xl font-black tracking-tight text-slate-950">Know what to carry before you book</h2>
-              <p className="mt-2 text-base leading-6 text-slate-700">Add mock files or use the demo profile. PassportGuide checks document labels against a transparent local ruleset; it does not inspect or store real identity documents.</p>
-
-              <div className="mt-6 space-y-3">
-                {documents.map((document) => (
-                  <article key={document.id} className="rounded-2xl border-2 border-slate-200 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-black text-slate-950">{document.title}</h3>
-                        <p className="mt-1 text-sm leading-5 text-slate-700">Accepted examples: {document.acceptedExamples}</p>
-                      </div>
-                      <span className={`rounded-full px-3 py-1 text-xs font-black ${statusStyles[document.status]}`}>{statusLabels[document.status]}</span>
+          <main className="flex-1 overflow-y-auto p-12 bg-white">
+            
+            {/* STEP 1: SMART UPLOAD DOCTOR */}
+            {activeTab === "documents" && (
+              <div className="max-w-[1200px]">
+                <h2 className="text-4xl font-extrabold text-gov-navy mb-3">Pre-Flight Document Check</h2>
+                <p className="text-xl text-gray-500 mb-8">Upload your required proofs here. PassportGuide AI will scan them to ensure they match perfectly before you apply.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                  {/* Address Proof */}
+                  <div className="bg-[#F8FAFC] p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col h-[280px]">
+                    <div className="mb-4">
+                      <h3 className="text-base font-bold text-gov-navy">1. Address Proof</h3>
+                      <p className="text-xs text-gray-500 mt-1">Utility Bill, Rent Agreement</p>
                     </div>
-                    <label className="mt-4 block cursor-pointer rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-3 transition hover:border-blue-700 hover:bg-blue-50">
-                      <span className="block text-sm font-black text-slate-900">Mock photo / PDF upload</span>
-                      <span className="mt-1 block text-sm text-slate-700">{document.mockFileName || "Choose a mock file from your device"}</span>
-                      <input
-                        className="sr-only"
-                        type="file"
-                        accept="image/*,application/pdf"
-                        onChange={(event) => updateMockFile(document.id, event.target.files?.[0]?.name ?? "")}
-                      />
+                    <input type="file" id="upload-address" className="hidden" accept=".pdf,.jpg,.png" onChange={(e) => { if (e.target.files?.length) handleFileUpload('address'); }} />
+                    <label htmlFor="upload-address" className={`mt-auto border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all ${docs.address ? 'bg-[#E6F4EA] border-[#137333] cursor-default' : isScanning.address ? 'bg-blue-50 border-blue-300 cursor-wait' : 'bg-white border-[#C8E0FF] hover:bg-blue-50 cursor-pointer'}`}>
+                      {docs.address ? <><span className="text-3xl mb-2">✅</span><p className="text-sm font-bold text-[#137333]">Verified</p></> : isScanning.address ? <><span className="text-3xl mb-2 animate-spin">⚙️</span><p className="text-sm font-bold text-blue-600">Scanning...</p></> : <><span className="text-3xl mb-2">📄</span><p className="text-sm font-semibold text-gov-navy">Browse Files</p></>}
                     </label>
-                    <p className="mt-3 text-sm font-medium leading-5 text-slate-800">{document.note}</p>
-                  </article>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={checkDocuments}
-                disabled={isCheckingDocuments}
-                className="mt-5 min-h-12 w-full rounded-xl bg-blue-800 px-5 py-3 text-base font-black text-white transition hover:bg-blue-900 disabled:cursor-wait disabled:bg-slate-500"
-              >
-                {isCheckingDocuments ? "Checking your demo checklist…" : "Check documents with PassportGuide AI"}
-              </button>
-            </div>
-
-            <aside className="rounded-3xl border border-blue-200 bg-blue-50 p-5 sm:p-6">
-              <p className="text-sm font-black uppercase tracking-[0.14em] text-blue-900">Plain-language result</p>
-              <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-                <p className="text-lg font-black text-slate-950">{readyDocuments}/3 ready</p>
-                <p className="mt-2 text-sm leading-6 text-slate-800">{documentSummary}</p>
-              </div>
-              <div className="mt-5 rounded-2xl border border-blue-200 bg-white p-4">
-                <h3 className="font-black text-slate-950">Why this is safer</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-700">In this prototype, only mock filenames and document categories are checked. Real numbers, images, OTPs, payments, and government submission are out of scope.</p>
-              </div>
-              <button
-                type="button"
-                onClick={continueToForm}
-                className="mt-5 min-h-12 w-full rounded-xl bg-slate-950 px-5 py-3 text-base font-black text-white transition hover:bg-slate-800"
-              >
-                Continue to 3-minute form
-              </button>
-            </aside>
-          </section>
-        )}
-
-        {step === 2 && (
-          <section className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]" aria-labelledby="form-filler-title">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-7">
-              <p className="text-sm font-black uppercase tracking-[0.14em] text-blue-800">Step 2 · Conversational form</p>
-              <h2 id="form-filler-title" className="mt-2 text-2xl font-black tracking-tight text-slate-950">A real form, one human question at a time</h2>
-              <p className="mt-2 text-base leading-6 text-slate-700">This is a 3-minute guided conversation. PassportGuide turns each answer into an editable field.</p>
-
-              <div className="mt-5 max-h-[330px] space-y-3 overflow-y-auto rounded-2xl bg-slate-100 p-4" aria-live="polite">
-                {messages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "assistant" ? "bg-white text-slate-900 shadow-sm" : "ml-auto bg-slate-950 text-white"}`}>
-                    <p className="mb-1 text-xs font-black uppercase tracking-wide opacity-70">{message.role === "assistant" ? "PassportGuide AI" : "You"}</p>
-                    {message.content}
                   </div>
-                ))}
-              </div>
 
-              {currentQuestion ? (
-                <form className="mt-5" onSubmit={submitAnswer}>
-                  <label htmlFor="citizen-answer" className="block text-base font-black text-slate-950">{currentQuestion.question}</label>
-                  <p id="answer-hint" className="mt-1 text-sm text-slate-700">{currentQuestion.hint}</p>
-                  <textarea
-                    id="citizen-answer"
-                    value={answer}
-                    onChange={(event) => setAnswer(event.target.value)}
-                    rows={3}
-                    aria-describedby="answer-hint"
-                    className="mt-3 w-full resize-none rounded-xl border-2 border-slate-300 bg-white p-3 text-base text-slate-950 placeholder:text-slate-500"
-                    placeholder="Type your answer here"
-                  />
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <button type="button" onClick={useDemoAnswer} className="min-h-12 rounded-xl border-2 border-slate-950 bg-white px-4 py-3 text-base font-black text-slate-950 hover:bg-slate-100">Use demo answer</button>
-                    <button type="submit" disabled={isSending || !answer.trim()} className="min-h-12 rounded-xl bg-blue-800 px-4 py-3 text-base font-black text-white hover:bg-blue-900 disabled:cursor-not-allowed disabled:bg-slate-400">
-                      {isSending ? "Updating draft…" : "Add to my application"}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <div className="mt-5 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4">
-                  <h3 className="font-black text-emerald-950">Conversation complete</h3>
-                  <p className="mt-1 text-sm leading-6 text-emerald-950">Your draft is ready to review. You can still edit every value below.</p>
-                </div>
-              )}
-            </div>
-
-            <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-black uppercase tracking-[0.14em] text-blue-800">Live application draft</p>
-                  <h3 className="mt-1 text-xl font-black text-slate-950">Review, never retype</h3>
-                </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-black ${formComplete ? statusStyles.ready : statusStyles.unverified}`}>{formComplete ? "Ready to book" : "In progress"}</span>
-              </div>
-              <dl className="mt-5 space-y-3">
-                {[
-                  ["Full name", applicant.fullName],
-                  ["Date of birth", applicant.dateOfBirth],
-                  ["Email", applicant.email],
-                  ["Mobile", applicant.mobile],
-                  ["Parent / guardian", applicant.parentName],
-                  ["Current address", applicant.currentAddress],
-                  ["Permanent address", applicant.permanentAddress]
-                ].map(([label, value]) => (
-                  <div key={label} className="border-b border-slate-200 pb-3 last:border-0">
-                    <dt className="text-xs font-black uppercase tracking-wide text-slate-600">{label}</dt>
-                    <dd className="mt-1 break-words text-sm font-bold leading-5 text-slate-950">{value || "Waiting for your answer"}</dd>
-                  </div>
-                ))}
-              </dl>
-              <button
-                type="button"
-                onClick={() => setStep(3)}
-                disabled={!formComplete}
-                className="mt-5 min-h-12 w-full rounded-xl bg-slate-950 px-5 py-3 text-base font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-              >
-                Review PSK slots and fee
-              </button>
-              {!formComplete && <p className="mt-2 text-center text-xs font-bold text-slate-600">Use Quick Demo Mode to pre-fill every mock field.</p>}
-            </aside>
-          </section>
-        )}
-
-        {step === 3 && (
-          <section className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]" aria-labelledby="appointment-title">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-7">
-              <p className="text-sm font-black uppercase tracking-[0.14em] text-blue-800">Step 3 · Appointment</p>
-              <h2 id="appointment-title" className="mt-2 text-2xl font-black tracking-tight text-slate-950">Choose a PSK slot with no surprises</h2>
-              <p className="mt-2 text-base leading-6 text-slate-700">Centre and slot availability below are static mock data for the hackathon demo.</p>
-
-              <fieldset className="mt-6">
-                <legend className="text-base font-black text-slate-950">Choose a nearby centre</legend>
-                <div className="mt-3 grid gap-3">
-                  {appointmentCentres.map((centre) => (
-                    <label key={centre.id} className={`cursor-pointer rounded-2xl border-2 p-4 transition ${selectedCentreId === centre.id ? "border-blue-800 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-400"}`}>
-                      <input className="sr-only" type="radio" name="centre" checked={selectedCentreId === centre.id} onChange={() => chooseCentre(centre.id)} />
-                      <span className="block font-black text-slate-950">{centre.name}</span>
-                      <span className="mt-1 block text-sm font-medium text-slate-700">{centre.locality} · {centre.distance}</span>
+                  {/* DOB Proof */}
+                  <div className="bg-[#F8FAFC] p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col h-[280px]">
+                    <div className="mb-4">
+                      <h3 className="text-base font-bold text-gov-navy">2. Date of Birth Proof</h3>
+                      <p className="text-xs text-gray-500 mt-1">Birth Certificate, PAN Card, Class 10</p>
+                    </div>
+                    <input type="file" id="upload-dob" className="hidden" accept=".pdf,.jpg,.png" onChange={(e) => { if (e.target.files?.length) handleFileUpload('dob'); }} />
+                    <label htmlFor="upload-dob" className={`mt-auto border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all ${docs.dob ? 'bg-[#E6F4EA] border-[#137333] cursor-default' : isScanning.dob ? 'bg-blue-50 border-blue-300 cursor-wait' : 'bg-white border-[#C8E0FF] hover:bg-blue-50 cursor-pointer'}`}>
+                      {docs.dob ? <><span className="text-3xl mb-2">✅</span><p className="text-sm font-bold text-[#137333]">Verified</p></> : isScanning.dob ? <><span className="text-3xl mb-2 animate-spin">⚙️</span><p className="text-sm font-bold text-blue-600">Scanning...</p></> : <><span className="text-3xl mb-2">📄</span><p className="text-sm font-semibold text-gov-navy">Browse Files</p></>}
                     </label>
-                  ))}
-                </div>
-              </fieldset>
+                  </div>
 
-              <fieldset className="mt-6">
-                <legend className="text-base font-black text-slate-950">Choose an available time</legend>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  {selectedCentre.slots.map((slot) => (
-                    <label key={slot.id} className={`cursor-pointer rounded-2xl border-2 p-4 text-center transition ${selectedSlotId === slot.id ? "border-blue-800 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-400"}`}>
-                      <input className="sr-only" type="radio" name="slot" checked={selectedSlotId === slot.id} onChange={() => setSelectedSlotId(slot.id)} />
-                      <span className="block text-sm font-black text-slate-950">{slot.date}</span>
-                      <span className="mt-1 block text-base font-black text-blue-900">{slot.time}</span>
+                  {/* Non-ECR Proof */}
+                  <div className="bg-[#F8FAFC] p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col h-[280px]">
+                    <div className="mb-4">
+                      <h3 className="text-base font-bold text-gov-navy">3. Non-ECR Proof</h3>
+                      <p className="text-xs text-gray-500 mt-1">10th Pass Certificate or Higher</p>
+                    </div>
+                    <input type="file" id="upload-ecr" className="hidden" accept=".pdf,.jpg,.png" onChange={(e) => { if (e.target.files?.length) handleFileUpload('ecr'); }} />
+                    <label htmlFor="upload-ecr" className={`mt-auto border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all ${docs.ecr ? 'bg-[#E6F4EA] border-[#137333] cursor-default' : isScanning.ecr ? 'bg-blue-50 border-blue-300 cursor-wait' : 'bg-white border-[#C8E0FF] hover:bg-blue-50 cursor-pointer'}`}>
+                      {docs.ecr ? <><span className="text-3xl mb-2">✅</span><p className="text-sm font-bold text-[#137333]">Verified</p></> : isScanning.ecr ? <><span className="text-3xl mb-2 animate-spin">⚙️</span><p className="text-sm font-bold text-blue-600">Scanning...</p></> : <><span className="text-3xl mb-2">📄</span><p className="text-sm font-semibold text-gov-navy">Browse Files</p></>}
                     </label>
-                  ))}
+                  </div>
                 </div>
-              </fieldset>
-            </div>
 
-            <aside className="rounded-3xl bg-slate-950 p-5 text-white shadow-card sm:p-6">
-              <p className="text-sm font-black uppercase tracking-[0.14em] text-amber-300">Clear fee summary</p>
-              <h3 className="mt-2 text-2xl font-black">Normal passport application</h3>
-              <dl className="mt-6 space-y-3 border-y border-slate-700 py-5">
-                <div className="flex items-center justify-between gap-4"><dt className="text-slate-200">Application fee</dt><dd className="text-xl font-black">₹{passportRules.appointment.normalFee.toLocaleString("en-IN")}</dd></div>
-                <div className="flex items-center justify-between gap-4"><dt className="text-slate-200">Selected slot</dt><dd className="text-right font-black">{selectedSlot.date}<br />{selectedSlot.time}</dd></div>
-                <div className="flex items-center justify-between gap-4"><dt className="text-slate-200">Centre</dt><dd className="text-right font-black">{selectedCentre.locality}</dd></div>
-              </dl>
-              <p className="mt-5 rounded-2xl bg-slate-800 p-4 text-sm leading-6 text-slate-100">{passportRules.appointment.originalsMessage}</p>
-              <button type="button" onClick={confirmAppointment} className="mt-5 min-h-12 w-full rounded-xl bg-amber-300 px-5 py-3 text-base font-black text-slate-950 transition hover:bg-amber-200">Confirm demo appointment</button>
-              <p className="mt-3 text-center text-xs font-bold text-slate-300">No payment or government booking happens in this demo.</p>
-            </aside>
-          </section>
-        )}
+                <div className="flex justify-end border-t border-gray-100 pt-8">
+                  <button 
+                    disabled={!canProceedToApp}
+                    onClick={() => setActiveTab("application")}
+                    className={`font-bold rounded-xl px-10 py-4 shadow-lg flex items-center gap-3 transition-all ${canProceedToApp ? 'bg-gov-navy text-white hover:bg-gov-navy/90' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+                  >
+                    {isDemoMode && !allDocsUploaded ? "Skip Upload (Demo Mode) →" : "Proceed to Application Form →"}
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {/* STEP 2: PASSPORT APPLICATION */}
+            {activeTab === "application" && (
+              <div className="max-w-[1200px]">
+                <h2 className="text-4xl font-extrabold text-gov-navy mb-8">Passport Type</h2>
+                
+                <div className="flex gap-12">
+                  <div className="flex-1">
+                    
+                    <div className="bg-[#FFF4EA] border border-orange-200 p-5 rounded-2xl mb-6 shadow-sm">
+                      <h4 className="font-extrabold text-gov-navy text-sm uppercase tracking-wider mb-3">💡 Why a conversational form?</h4>
+                      <div className="grid grid-cols-3 gap-4 text-xs text-gray-700">
+                        <div><strong className="block text-gov-orange mb-1">Zero Cognitive Overload</strong>No massive forms. The AI asks one simple human question at a time.</div>
+                        <div><strong className="block text-gov-orange mb-1">Contextual Help</strong>Confused by a term like "Non-ECR"? Just ask the chat what it means.</div>
+                        <div><strong className="block text-gov-orange mb-1">Error Prevention</strong>Validates answers instantly to prevent rejections at the passport office.</div>
+                      </div>
+                    </div>
 
-        {step === 4 && (
-          <section className="mx-auto mt-8 max-w-2xl rounded-3xl border-2 border-emerald-300 bg-white p-6 text-center shadow-card sm:p-10" aria-labelledby="confirmation-title">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-3xl" aria-hidden="true">✓</div>
-            <p className="mt-5 text-sm font-black uppercase tracking-[0.14em] text-emerald-800">Demo complete</p>
-            <h2 id="confirmation-title" className="mt-2 text-3xl font-black tracking-tight text-slate-950">Your demo slot is reserved</h2>
-            <p className="mt-3 text-base leading-7 text-slate-700">Aarav’s fictional application is set for <strong>{selectedSlot.date}, {selectedSlot.time}</strong> at <strong>{selectedCentre.name}</strong>.</p>
-            <div className="mt-6 rounded-2xl bg-slate-100 p-4 text-left">
-              <p className="font-black text-slate-950">What this demonstrates</p>
-              <p className="mt-1 text-sm leading-6 text-slate-700">Document clarity, a conversational form, editable citizen-controlled data, and an appointment decision that is clear on a small screen.</p>
-            </div>
-            <button type="button" onClick={activateDemo} className="mt-6 min-h-12 rounded-xl bg-slate-950 px-5 py-3 text-base font-black text-white hover:bg-slate-800">Restart the demo</button>
-          </section>
-        )}
+                    <div className="bg-[#F8FAFC] p-8 rounded-2xl border border-gray-100 h-[450px] flex flex-col">
+                      <div className="flex-1 overflow-y-auto mb-6 space-y-4 pr-2">
+                        {chatHistory.map((msg, idx) => (
+                          <div key={idx} className={`p-5 rounded-xl shadow-sm border border-gray-100 text-sm leading-relaxed ${msg.role === 'ai' ? 'bg-white text-gray-800' : 'bg-[#FFF4EA] text-gov-navy ml-12 border-[#F49931]/30'}`}>
+                            <span className="font-bold">{msg.role === 'ai' ? 'PassportGuide AI: ' : 'You: '}</span>
+                            {msg.text}
+                          </div>
+                        ))}
+                      </div>
 
-        <footer className="mt-8 text-center text-xs font-medium leading-5 text-slate-600">
-          {passportRules.prototypeNotice} Built for a hackathon; not affiliated with Passport Seva or the Government of India.
-        </footer>
+                      <form onSubmit={handleChatSubmit} className="mt-auto shrink-0">
+                        <input 
+                          type="text" 
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          placeholder="Type your answer here..."
+                          className="w-full border border-gray-200 p-4 rounded-xl text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-gov-navy shadow-sm"
+                        />
+                        <div className="flex gap-4 mt-4">
+                          {isDemoMode && (
+                            <button type="button" onClick={() => setChatInput(getDemoAnswer())} className="px-6 py-3 bg-white border border-gray-200 text-gov-navy font-bold rounded-xl text-sm hover:bg-gray-50 transition-colors">
+                              Use Demo Answer
+                            </button>
+                          )}
+                          <button type="submit" disabled={isSubmitting} className="flex-1 bg-gov-navy text-white font-bold rounded-xl text-sm py-3 hover:bg-gov-navy/90">
+                            {isSubmitting ? "Processing..." : "NEXT"}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Live Draft */}
+                  <div className="w-[350px]">
+                    <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] sticky top-0 max-h-[700px] overflow-y-auto">
+                      <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-widest">Live Draft</h3>
+                        {isReadyToBook(applicant) 
+                          ? <span className="bg-[#E6F4EA] text-[#137333] text-xs font-bold px-3 py-1 rounded-full">Ready</span>
+                          : <span className="bg-gray-100 text-gray-500 text-xs font-bold px-3 py-1 rounded-full">In Progress</span>
+                        }
+                      </div>
+
+                      <div className="space-y-4 divide-y divide-gray-50 pb-8">
+                        <div className="pt-2"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Full Name</p><p className={`text-sm font-semibold mt-1 ${applicant.fullName ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.fullName || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Date of Birth</p><p className={`text-sm font-semibold mt-1 ${applicant.dob ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.dob || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Email</p><p className={`text-sm font-semibold mt-1 ${applicant.email ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.email || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mobile</p><p className={`text-sm font-semibold mt-1 ${applicant.mobile ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.mobile || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Parent Name</p><p className={`text-sm font-semibold mt-1 ${applicant.parentName ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.parentName || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Current Address</p><p className={`text-sm font-semibold mt-1 ${applicant.currentAddress ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.currentAddress || "Waiting..."}</p></div>
+                        <div className="pt-3"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Permanent Address</p><p className={`text-sm font-semibold mt-1 ${applicant.permanentAddress ? 'text-gray-800' : 'text-gray-300'}`}>{applicant.permanentAddress || "Waiting..."}</p></div>
+                      </div>
+
+                      <button 
+                        disabled={!isReadyToBook(applicant)}
+                        onClick={() => setActiveTab("appointment")}
+                        className={`w-full py-4 rounded-xl font-bold text-sm transition-all duration-300 ${isReadyToBook(applicant) ? 'bg-gov-orange text-white shadow-lg' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                      >
+                        Review PSK Slots & Fee
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "appointment" && (
+              <div className="max-w-[800px]">
+                <h2 className="text-4xl font-extrabold text-gov-navy mb-10">Book Appointment</h2>
+                <div className="bg-[#F8FAFC] p-10 rounded-2xl border border-gray-100">Appointment component renders here...</div>
+              </div>
+            )}
+            
+            {activeTab === "track" && (
+              <div className="max-w-[800px]">
+                <h2 className="text-4xl font-extrabold text-gov-navy mb-10">Track Application</h2>
+                <div className="bg-[#F8FAFC] p-10 rounded-2xl border border-gray-100">Journey Tracker renders here...</div>
+              </div>
+            )}
+          </main>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
