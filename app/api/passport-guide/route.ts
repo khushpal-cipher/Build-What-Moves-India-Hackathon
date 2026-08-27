@@ -4,16 +4,12 @@ export async function POST(req: Request) {
   try {
     const { message, currentDraft } = await req.json();
     
-    // Explicitly grab the key and clean it
     const apiKey = process.env.GEMINI_API_KEY?.trim();
-    
-    // DEBUG: This will print in your VS Code terminal so we know it loaded!
-    console.log("🔑 API Key Status: ", apiKey ? `Loaded (Starts with ${apiKey.substring(0, 5)}...)` : "MISSING!");
-
     if (!apiKey) {
       return NextResponse.json({ error: "Missing API Key in .env.local" }, { status: 500 });
     }
 
+    // UPDATED PROMPT: Now includes all official MEA fields
     const prompt = `
     You are an official Indian Passport Application Guide.
     The user is filling out their passport form one conversational step at a time.
@@ -24,23 +20,22 @@ export async function POST(req: Request) {
     User's latest input: "${message}"
 
     Strict Instructions:
-    1. Analyze the user's input. If it is gibberish (e.g., "asdfgh"), offensive, or clearly invalid for a passport form, DO NOT extract it. 
+    1. Analyze the user's input. If it is gibberish, offensive, or clearly invalid, DO NOT extract it. 
     2. If invalid, your 'reply' must politely explain what went wrong and ask the question again.
     3. If valid, extract the relevant data into the 'extractedFields' object.
-    4. Your 'reply' must then ask for the NEXT missing field in this exact order: 
-       fullName ➔ dob (ask for YYYY-MM-DD format) ➔ email ➔ mobile ➔ parentName ➔ currentAddress ➔ permanentAddress.
-    5. If they are providing their permanent address and say "Same", copy the currentAddress.
+    4. Handle negatives gracefully: If they say "No" to aliases, set aliasName to "None". If they say "Same" for permanent address, copy the currentAddress. If they say "No" to criminal records, set criminalRecord to "None".
+    5. Your 'reply' must ask for the NEXT missing field in this EXACT order: 
+       fullName ➔ aliasName (ask if they have any) ➔ gender ➔ dob (ask for YYYY-MM-DD) ➔ placeOfBirth (Town, District, State) ➔ fatherName ➔ motherName ➔ spouseName (if married, else NA) ➔ mobile ➔ email ➔ currentAddress (with PIN) ➔ previousAddress (ask if they lived elsewhere in the past 1 year) ➔ permanentAddress ➔ education ➔ employmentType ➔ distinguishingMark ➔ criminalRecord.
     6. If all fields are complete, tell them the draft is ready and to click 'Review PSK Slots & Fee'.
     `;
 
-    // Direct REST API Call using the Secure Header Method
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": apiKey, // Securely passing the key here instead of the URL
+          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
@@ -53,18 +48,25 @@ export async function POST(req: Request) {
                   type: "OBJECT",
                   properties: {
                     fullName: { type: "STRING" },
+                    aliasName: { type: "STRING" },
+                    gender: { type: "STRING" },
                     dob: { type: "STRING" },
-                    email: { type: "STRING" },
+                    placeOfBirth: { type: "STRING" },
+                    fatherName: { type: "STRING" },
+                    motherName: { type: "STRING" },
+                    spouseName: { type: "STRING" },
                     mobile: { type: "STRING" },
-                    parentName: { type: "STRING" },
+                    email: { type: "STRING" },
                     currentAddress: { type: "STRING" },
-                    permanentAddress: { type: "STRING" }
+                    previousAddress: { type: "STRING" },
+                    permanentAddress: { type: "STRING" },
+                    education: { type: "STRING" },
+                    employmentType: { type: "STRING" },
+                    distinguishingMark: { type: "STRING" },
+                    criminalRecord: { type: "STRING" }
                   }
                 },
-                reply: { 
-                  type: "STRING", 
-                  description: "Your conversational response to the user." 
-                }
+                reply: { type: "STRING" }
               },
               required: ["reply"]
             }
@@ -74,14 +76,12 @@ export async function POST(req: Request) {
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
-      console.error("Google REST API Error:", errorData);
-      throw new Error("Failed to fetch from Gemini REST API");
+      const errorText = await response.text();
+      console.error(`Gemini API Error [${response.status}]:`, errorText);
+      throw new Error(`Failed to fetch from Gemini REST API. Status: ${response.status}`);
     }
 
     const data = await response.json();
-    
-    // Parse the JSON string that Gemini returns inside the text block
     const rawText = data.candidates[0].content.parts[0].text;
     const responseData = JSON.parse(rawText);
 
@@ -89,9 +89,6 @@ export async function POST(req: Request) {
 
   } catch (error) {
     console.error("Backend Error:", error);
-    return NextResponse.json(
-      { error: "Failed to process request" }, 
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to process request" }, { status: 500 });
   }
 }
