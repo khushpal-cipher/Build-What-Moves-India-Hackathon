@@ -53,6 +53,10 @@ export default function PassportPathDesktop() {
     dob: false,
     ecr: false,
   });
+  //NEW STATES FOR CONSISTENCY CHECK
+  const [docImages, setDocImages] = useState({ address: "", dob: "", ecr: "" });
+  const [consistencyResult, setConsistencyResult] = useState<any>(null);
+  const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const allDocsUploaded = docs.address && docs.dob && docs.ecr;
   const canProceedToApp = isDemoMode || allDocsUploaded;
 
@@ -160,6 +164,8 @@ export default function PassportPathDesktop() {
       reader.readAsDataURL(file);
       reader.onloadend = async () => {
         const base64Data = reader.result as string;
+        // Add this line to save the image to state!
+        setDocImages(prev => ({ ...prev, [docType]: base64Data }));
         const response = await fetch("/api/verify-document", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -517,6 +523,56 @@ export default function PassportPathDesktop() {
                     </label>
                   </div>
                 </div>
+                {/* NEW: DOCUMENT CONSISTENCY SCANNER */}
+                {docs.address && docs.dob && (
+                  <div className="bg-[#FFF4EA] border border-orange-200 p-6 rounded-2xl mb-8 shadow-sm">
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-gov-navy">Document Consistency Scanner</h3>
+                        <p className="text-sm text-gray-600">Cross-check your uploads for spelling mismatches before proceeding.</p>
+                      </div>
+                      <button 
+                        onClick={async () => {
+                          setIsCheckingConsistency(true);
+                          try {
+                            const res = await fetch('/api/consistency', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                doc1Base64: docImages.address, doc1Type: "image/jpeg",
+                                doc2Base64: docImages.dob, doc2Type: "image/jpeg"
+                              })
+                            });
+                            const data = await res.json();
+                            setConsistencyResult(data);
+                          } catch (e) {
+                            console.error(e);
+                          } finally {
+                            setIsCheckingConsistency(false);
+                          }
+                        }}
+                        className="bg-gov-orange text-white font-bold px-6 py-3 rounded-xl shadow-md hover:bg-orange-500 transition-all"
+                      >
+                        {isCheckingConsistency ? "Scanning..." : "🔍 Run Cross-Check"}
+                      </button>
+                    </div>
+
+                    {/* Show the Results */}
+                    {consistencyResult && (
+                      <div className={`p-4 rounded-xl border ${consistencyResult.isConsistent ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                        <h4 className="font-bold mb-2">
+                          {consistencyResult.isConsistent ? "✅ Perfect Match!" : "⚠️ Discrepancies Found"}
+                        </h4>
+                        {!consistencyResult.isConsistent && (
+                          <ul className="list-disc pl-5 text-sm mb-3 text-red-700">
+                            {consistencyResult.discrepanciesFound.map((err: string, i: number) => <li key={i}>{err}</li>)}
+                          </ul>
+                        )}
+                        <p className="text-sm text-gray-800 font-semibold">Recommendation: {consistencyResult.recommendation}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="flex justify-end border-t border-gray-100 pt-8">
                   <button
                     onClick={() => setActiveTab("application")}
