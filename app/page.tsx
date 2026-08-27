@@ -23,6 +23,7 @@ interface ApplicantData {
 }
 
 export default function PassportPathDesktop() {
+  const [language, setLanguage] = useState("English");
   const { userId } = useAuth(); // Identifies the logged-in user
   const [isDemoMode, setIsDemoMode] = useState(true);
   
@@ -197,8 +198,9 @@ export default function PassportPathDesktop() {
   };
 
   const handleChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault(); // This MUST be the very first line to stop the page refresh!
     if (!chatInput.trim()) return;
+    
     setIsSubmitting(true);
     const userText = chatInput;
     setChatInput("");
@@ -208,8 +210,10 @@ export default function PassportPathDesktop() {
       const response = await fetch("/api/passport-guide", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userText, currentDraft: applicant }),
+        // Pass language here securely
+        body: JSON.stringify({ message: userText, currentDraft: applicant, language: language }), 
       });
+      
       if (!response.ok) throw new Error("API Route failed.");
       const data = await response.json();
 
@@ -218,17 +222,14 @@ export default function PassportPathDesktop() {
       if (data.reply)
         setChatHistory((prev) => [...prev, { role: "ai", text: data.reply }]);
 
-      // --- NEW: Silent Auto-Save to MongoDB ---
-      // We check if userId exists (they are logged in) and if we extracted new data
+      // --- Silent Auto-Save to MongoDB ---
       if (userId && data.extractedFields) {
         fetch('/api/draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // Send the merged data to the database immediately
           body: JSON.stringify({ draft: { ...applicant, ...data.extractedFields } }) 
         });
       }
-      // ---------------------------------------
 
     } catch (error) {
       console.error("API Error:", error);
@@ -357,9 +358,15 @@ export default function PassportPathDesktop() {
                   Demo
                 </span>
               </div>
-              <button className="border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600 font-medium hover:bg-gray-50">
-                English ⌄
-              </button>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600 font-medium bg-white hover:bg-gray-50 focus:outline-none cursor-pointer shadow-sm transition-all"
+              >
+                <option value="English">English</option>
+                <option value="Hindi">हिंदी (Hindi)</option>
+                <option value="Marathi">मराठी (Marathi)</option>
+              </select>
               
               {/* Clerk Auth State */}
               <Show when="signed-out">
@@ -653,22 +660,13 @@ export default function PassportPathDesktop() {
                         />
                         <div className="flex gap-4 mt-4">
                           {isDemoMode && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => setChatInput(getDemoAnswer())}
-                                className="px-6 py-3 bg-white border border-gray-200 text-gov-navy font-bold rounded-xl text-sm hover:bg-gray-50 transition-colors"
-                              >
-                                Use Demo Answer
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleInstantFill}
-                                className="px-6 py-3 bg-[#FFF4EA] border border-orange-200 text-gov-orange font-bold rounded-xl text-sm hover:bg-orange-50 transition-colors"
-                              >
-                                ⚡ Instant Fill (Bypass)
-                              </button>
-                            </>
+                            <button
+                              type="button"
+                              onClick={handleInstantFill}
+                              className="px-6 py-3 bg-[#FFF4EA] border border-orange-200 text-gov-orange font-bold rounded-xl text-sm hover:bg-orange-50 transition-colors"
+                            >
+                              ⚡ Instant Fill (Bypass)
+                            </button>
                           )}
                           <button
                             type="submit"

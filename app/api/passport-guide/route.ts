@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const { message, currentDraft } = await req.json();
+    // Change to this:
+    const { message, currentDraft, language } = await req.json();
+    
     
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
@@ -27,6 +29,7 @@ export async function POST(req: Request) {
     5. Your 'reply' must ask for the NEXT missing field in this EXACT order: 
        fullName ➔ aliasName (ask if they have any) ➔ gender ➔ dob (ask for YYYY-MM-DD) ➔ placeOfBirth (Town, District, State) ➔ fatherName ➔ motherName ➔ spouseName (if married, else NA) ➔ mobile ➔ email ➔ currentAddress (with PIN) ➔ previousAddress (ask if they lived elsewhere in the past 1 year) ➔ permanentAddress ➔ education ➔ employmentType ➔ distinguishingMark ➔ criminalRecord.
     6. If all fields are complete, tell them the draft is ready and to click 'Review PSK Slots & Fee'.
+    7. CRITICAL: Your 'reply' message MUST be translated into ${language || 'English'}. However, the 'extractedFields' JSON keys and values must always remain in English for the database.
     `;
 
     const response = await fetch(
