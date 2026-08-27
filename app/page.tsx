@@ -1,7 +1,6 @@
 "use client";
-
-import { useState } from "react";
-
+import { SignInButton, UserButton, Show, useAuth } from "@clerk/nextjs";
+import { useState, useEffect } from "react";
 // UPDATED: Now matches all MEA requirements
 interface ApplicantData {
   fullName: string;
@@ -24,7 +23,26 @@ interface ApplicantData {
 }
 
 export default function PassportPathDesktop() {
+  const { userId } = useAuth(); // Identifies the logged-in user
   const [isDemoMode, setIsDemoMode] = useState(true);
+  
+  // ... (keep your existing useState variables)
+
+  // NEW: Fetch saved progress when the user logs in
+  useEffect(() => {
+    if (userId) {
+      fetch('/api/draft')
+        .then(res => res.json())
+        .then(data => {
+          if (data.draft) {
+             setApplicant(data.draft);
+             // Optional: Add a welcome back message to the chat
+             setChatHistory(prev => [...prev, { role: "ai", text: "Welcome back! I've securely restored your previous draft. Let's continue." }]);
+          }
+        })
+        .catch(err => console.error("Failed to load draft:", err));
+    }
+  }, [userId]);
   const [activeTab, setActiveTab] = useState<
     "documents" | "application" | "appointment" | "track"
   >("documents");
@@ -94,8 +112,9 @@ export default function PassportPathDesktop() {
   };
 
   // HACKATHON BYPASS: Instantly fills the form to avoid rate-limits on stage
+  // HACKATHON BYPASS: Instantly fills the form to avoid rate-limits on stage
   const handleInstantFill = () => {
-    setApplicant({
+    const demoData = {
       fullName: "Aarav Kulkarni",
       aliasName: "None",
       gender: "Male",
@@ -112,15 +131,20 @@ export default function PassportPathDesktop() {
       education: "Bachelor of Engineering",
       employmentType: "Private",
       distinguishingMark: "None",
-      criminalRecord: "No",
-    });
-    setChatHistory((prev) => [
-      ...prev,
-      {
-        role: "ai",
-        text: "Draft complete! Please review your details on the right and click 'Review PSK Slots & Fee' to proceed.",
-      },
-    ]);
+      criminalRecord: "No"
+    };
+    
+    setApplicant(demoData);
+    setChatHistory(prev => [...prev, { role: "ai", text: "Draft complete! Please review your details on the right and click 'Review PSK Slots & Fee' to proceed." }]);
+
+    // NEW: Auto-save the bypass data too!
+    if (userId) {
+      fetch('/api/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft: demoData }) 
+      });
+    }
   };
 
   const handleFileUpload = async (
@@ -187,6 +211,19 @@ export default function PassportPathDesktop() {
         setApplicant((prev) => ({ ...prev, ...data.extractedFields }));
       if (data.reply)
         setChatHistory((prev) => [...prev, { role: "ai", text: data.reply }]);
+
+      // --- NEW: Silent Auto-Save to MongoDB ---
+      // We check if userId exists (they are logged in) and if we extracted new data
+      if (userId && data.extractedFields) {
+        fetch('/api/draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Send the merged data to the database immediately
+          body: JSON.stringify({ draft: { ...applicant, ...data.extractedFields } }) 
+        });
+      }
+      // ---------------------------------------
+
     } catch (error) {
       console.error("API Error:", error);
       setChatHistory((prev) => [
@@ -317,6 +354,19 @@ export default function PassportPathDesktop() {
               <button className="border border-gray-200 rounded-lg px-4 py-2 text-sm text-gray-600 font-medium hover:bg-gray-50">
                 English ⌄
               </button>
+              
+              {/* Clerk Auth State */}
+              <Show when="signed-out">
+                <SignInButton mode="modal">
+                  <button className="bg-gov-navy text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md hover:bg-gov-navy/90 transition-all">
+                    Sign In
+                  </button>
+                </SignInButton>
+              </Show>
+
+              <Show when="signed-in">
+                <UserButton />
+              </Show>
             </div>
           </header>
 

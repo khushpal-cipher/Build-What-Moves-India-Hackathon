@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
-const inter = Inter({ 
-  subsets: ["latin"],
-  variable: '--font-inter',
-});
-
 export const metadata: Metadata = {
-  title: "Passport Seva | Service Excellence",
-  description: "A calmer, accessible path to a first passport.",
+  title: "PassportPath - Passport Seva",
+  description: "AI-native passport application and guidance portal",
 };
 
 export default function RootLayout({
@@ -18,10 +13,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${inter.variable} font-sans bg-white text-gov-navy`}>
-        {children}
-      </body>
-    </html>
+    <ClerkProvider>
+      <html lang="en">
+        <body>{children}</body>
+      </html>
+    </ClerkProvider>
   );
 }

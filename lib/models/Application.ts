@@ -1,17 +1,28 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IApplication extends Document {
-  fullName: string;
-  dateOfBirth: string;
-  email: string;
-  mobile: string;
-  parentName: string;
-  currentAddress: string;
-  permanentAddress: string;
+  clerkUserId: string; // Links this draft to the logged-in user
+  fullName?: string;
+  aliasName?: string;
+  gender?: string;
+  dob?: string; // Mapped from your 17-step UI
+  placeOfBirth?: string;
+  fatherName?: string;
+  motherName?: string;
+  spouseName?: string;
+  email?: string;
+  mobile?: string;
+  currentAddress?: string;
+  previousAddress?: string;
+  permanentAddress?: string;
+  education?: string;
+  employmentType?: string;
+  distinguishingMark?: string;
+  criminalRecord?: string;
   
-  pskCentreId: string;
-  appointmentSlotId: string;
-  appointmentFee: number;
+  pskCentreId?: string;
+  appointmentSlotId?: string;
+  appointmentFee?: number;
   
   status: "draft" | "booked";
   createdAt: Date;
@@ -19,13 +30,24 @@ export interface IApplication extends Document {
 
 const ApplicationSchema = new Schema<IApplication>(
   {
-    fullName: { type: String, required: true },
-    dateOfBirth: { type: String, required: true },
-    email: { type: String, required: true },
-    mobile: { type: String, required: true },
-    parentName: { type: String, required: true },
-    currentAddress: { type: String, required: true },
-    permanentAddress: { type: String, required: true },
+    clerkUserId: { type: String, required: true, unique: true }, // The only truly required field for a draft
+    fullName: { type: String, required: false },
+    aliasName: { type: String, required: false },
+    gender: { type: String, required: false },
+    dob: { type: String, required: false },
+    placeOfBirth: { type: String, required: false },
+    fatherName: { type: String, required: false },
+    motherName: { type: String, required: false },
+    spouseName: { type: String, required: false },
+    email: { type: String, required: false },
+    mobile: { type: String, required: false },
+    currentAddress: { type: String, required: false },
+    previousAddress: { type: String, required: false },
+    permanentAddress: { type: String, required: false },
+    education: { type: String, required: false },
+    employmentType: { type: String, required: false },
+    distinguishingMark: { type: String, required: false },
+    criminalRecord: { type: String, required: false },
     
     pskCentreId: { type: String, required: false },
     appointmentSlotId: { type: String, required: false },
@@ -36,5 +58,4 @@ const ApplicationSchema = new Schema<IApplication>(
   { timestamps: true }
 );
 
-// Prevent model overwrite error in Next.js hot reloads
 export default mongoose.models.Application || mongoose.model<IApplication>("Application", ApplicationSchema);
