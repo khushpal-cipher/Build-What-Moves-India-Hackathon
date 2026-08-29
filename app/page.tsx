@@ -114,6 +114,29 @@ export default function PassportPathDesktop() {
     }
   };
 
+  const handleReset = () => {
+    // Reset all application state to initial values
+    setApplicant({});
+    setDocs({ address: false, dob: false, ecr: false });
+    setDocImages({ address: "", dob: "", ecr: "" });
+    setConsistencyResult(null);
+    setChatHistory([
+      { role: "ai", text: "What is your full name, exactly as it appears on your identity proofs?" }
+    ]);
+    setChatInput("");
+    setSelectedDate("");
+    setSelectedPayment("");
+    setIsBooked(false);
+    setActiveTab("documents");
+
+    // Also clear the persisted server-side draft so it doesn't reload on next visit
+    if (userId) {
+      fetch("/api/draft", {
+        method: "DELETE",
+      }).catch(err => console.error("Failed to delete draft from server:", err));
+    }
+  };
+
   const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     docType: "address" | "dob" | "ecr",
@@ -549,6 +572,14 @@ export default function PassportPathDesktop() {
                     </div>
                   </div>
                 </div>
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={handleReset}
+                  className="bg-white text-gray-500 border border-gray-300 font-bold rounded-xl px-8 py-3 hover:bg-gray-50 transition-all shadow-sm text-sm"
+                >
+                  ↺ Start New Application
+                </button>
+              </div>
               </div>
             )}
 

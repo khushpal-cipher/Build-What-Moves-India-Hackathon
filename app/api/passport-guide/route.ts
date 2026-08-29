@@ -81,11 +81,22 @@ export async function POST(req: Request) {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Gemini API Error [${response.status}]:`, errorText);
-      throw new Error(`Failed to fetch from Gemini REST API. Status: ${response.status}`);
+
+      if (response.status === 429) {
+        return NextResponse.json({
+          reply: "⚠️ Gemini free quota reached for this model. Please wait a short moment or click 'Instant Fill (Bypass)' to continue your application demo.",
+          extractedFields: {}
+        });
+      }
+
+      return NextResponse.json({ error: `Gemini API Error: ${response.status}` }, { status: response.status });
     }
 
     const data = await response.json();
-    const rawText = data.candidates[0].content.parts[0].text;
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      return NextResponse.json({ error: "No content returned from Gemini" }, { status: 500 });
+    }
     const responseData = JSON.parse(rawText);
 
     return NextResponse.json(responseData);

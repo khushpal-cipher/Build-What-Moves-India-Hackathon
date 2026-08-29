@@ -30,16 +30,38 @@ export async function POST(req: Request) {
     const { draft } = await req.json();
     await dbConnect();
     
+    // If an empty draft is passed, delete the record from database
+    if (!draft || Object.keys(draft).length === 0) {
+      await Application.deleteOne({ clerkUserId: userId });
+      return NextResponse.json({ success: true, message: "Draft deleted" });
+    }
+
     // Find the document by Clerk ID and update it. If it doesn't exist, create it (upsert).
     await Application.findOneAndUpdate(
       { clerkUserId: userId },
       { ...draft, clerkUserId: userId },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Database Post Error:", error);
     return NextResponse.json({ error: "Failed to save draft" }, { status: 500 });
+  }
+}
+
+// DELETE / CLEAR DRAFT
+export async function DELETE() {
+  try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    await dbConnect();
+    await Application.deleteOne({ clerkUserId: userId });
+
+    return NextResponse.json({ success: true, message: "Draft cleared successfully" });
+  } catch (error) {
+    console.error("Database Delete Error:", error);
+    return NextResponse.json({ error: "Failed to delete draft" }, { status: 500 });
   }
 }
